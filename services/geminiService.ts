@@ -1,210 +1,342 @@
-
-import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { WeeklyPlan, WeeklyFocus } from "../types";
 
-// 辅助函数：清洗 AI 返回的字符串，确保只有纯 JSON 内容
-function cleanJsonString(text: string): string {
-  return text.replace(/```json/g, '').replace(/```/g, '').trim();
-}
-
-const RECIPE_SCHEMA = {
-  type: Type.OBJECT,
+// --- Schemas for Tool Calling (in Chinese) ---
+const weeklyPlanSchema = {
+  type: "object",
   properties: {
-    name: { type: Type.STRING },
-    tcmBenefit: { type: Type.STRING },
-    tcmDrink: { type: Type.STRING },
-    tcmTaboos: { type: Type.STRING, description: "中医禁忌，如：感冒发热期间不宜食用" },
-    calories: { type: Type.STRING },
-    nutritionSummary: { type: Type.STRING },
-    prepTime: { type: Type.STRING },
-    cookTime: { type: Type.STRING },
-    difficulty: { type: Type.STRING },
-    efficiencyTag: { type: Type.STRING },
-    cuisineStyle: { type: Type.STRING },
-    ingredients: {
-      type: Type.ARRAY,
-      items: {
-        type: Type.OBJECT,
-        properties: { 
-          name: { type: Type.STRING }, 
-          amount: { type: Type.STRING } 
-        },
-        required: ['name', 'amount']
-      }
+    theme: {
+      type: "string",
+      description: "为本周计划起一个有吸引力的中文主题。",
     },
-    steps: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING, description: "极其详细的步骤，包含火候控制（如：中大火）、切割规格（如：2mm薄片）、状态判断标准（如：直到色泽金黄）" }
-    }
-  },
-  required: [
-    'name', 'tcmBenefit', 'tcmDrink', 'tcmTaboos', 'calories', 'nutritionSummary', 
-    'prepTime', 'cookTime', 'difficulty', 'efficiencyTag', 
-    'cuisineStyle', 'ingredients', 'steps'
-  ]
-};
-
-const WEEKLY_PLAN_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    theme: { type: Type.STRING },
-    philosophy: { type: Type.STRING },
+    philosophy: { type: "string", description: "与主题相关的简短中文宣传语。" },
     groceryList: {
-      type: Type.ARRAY,
+      type: "array",
       items: {
-        type: Type.OBJECT,
+        type: "object",
         properties: {
-          category: { type: Type.STRING },
+          category: { type: "string", description: "例如：'蔬菜', '肉类'" },
           items: {
-            type: Type.ARRAY,
+            type: "array",
             items: {
-              type: Type.OBJECT,
-              properties: { name: { type: Type.STRING }, amount: { type: Type.STRING } },
-              required: ['name', 'amount']
-            }
-          }
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                amount: { type: "string" },
+              },
+              required: ["name", "amount"],
+            },
+          },
         },
-        required: ['category', 'items']
-      }
+        required: ["category", "items"],
+      },
     },
     menu: {
-      type: Type.ARRAY,
+      type: "array",
       items: {
-        type: Type.OBJECT,
+        type: "object",
         properties: {
-          day: { type: Type.STRING, description: "周六至周五共七天" },
-          preparationTip: { type: Type.STRING },
-          weekendPrepOperations: {
-            type: Type.ARRAY,
-            items: { type: Type.STRING },
-            description: "详细的批量备菜步骤，必须包含精准量化（如：将500g猪肉切成3cm方块）和分装预处理指导"
+          day: { type: "string", description: "例如：'周一'" },
+          preparationTip: {
+            type: "string",
+            description: "当天的备餐中文小贴士。",
           },
-          lunch: RECIPE_SCHEMA,
-          dinner: RECIPE_SCHEMA
+          weekendPrepOperations: {
+            type: "array",
+            items: { type: "string" },
+            description: "仅用于周六/周日。必须是详细的中文步骤。",
+          },
+          lunch: {
+            type: "object",
+            description: "一个包含详细中文信息的午餐食谱对象",
+          },
+          dinner: {
+            type: "object",
+            description: "一个包含详细中文信息的晚餐食谱对象",
+          },
         },
-        required: ['day', 'lunch', 'dinner', 'preparationTip']
-      }
-    }
+        required: ["day", "preparationTip", "lunch", "dinner"],
+      },
+    },
   },
-  required: ['theme', 'philosophy', 'groceryList', 'menu']
+  required: ["theme", "philosophy", "groceryList", "menu"],
 };
 
-export async function generateWeeklyPlan(userPrompt: string, selectedFocus: WeeklyFocus[], locationContext: string, additionalPrefs: string = ""): Promise<WeeklyPlan> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const focusMap: Record<string, string> = {
-    tasty: "爆款风味", brain_power: "补脑续命", skin_beauty: "养颜滋阴",
-    digestive: "健脾祛湿", stress_relief: "疏肝理气", post_workout: "高蛋白恢复",
-    weight_loss: "低卡掉秤", late_night: "熬夜修复", tcm_authentic: "正统食养",
-    seasonal_health: "顺时依季", energy_boost: "大补元气", family_friendly: "全家共享",
-    gut_health: "润肠通便", sleep_well: "宁心安神", eye_care: "明目护眼",
-    auto: "智能自动"
-  };
+const todayRecommendationSchema = {
+  type: "object",
+  properties: {
+    name: { type: "string", description: "推荐菜肴的中文名称。" },
+    benefit: {
+      type: "string",
+      description: "主要的食养或中医健康益处的中文描述。",
+    },
+    reason: { type: "string", description: "今天为什么推荐这道菜的中文原因。" },
+  },
+  required: ["name", "benefit", "reason"],
+};
 
-  const focusDescriptions = selectedFocus.map(f => focusMap[f] || f).join('、');
+// Helper to create a standardized fetch request to an OpenAI-compatible API
+async function openaiFetch(
+  endpoint: string,
+  body: object,
+  method: string = "POST",
+) {
+  const apiKey = localStorage.getItem("gemini_apiKey");
+  const baseURL =
+    localStorage.getItem("gemini_baseURL") || "https://api.openai.com/v1";
+
+  if (!apiKey) {
+    alert("API Key 未设置，请在设置页面中配置。");
+    throw new Error("API Key not found in localStorage");
+  }
+
+  const fullURL = `${baseURL.replace(/\/$/, "")}${endpoint}`;
+
+  const response = await fetch(fullURL, {
+    method: method,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: method === "POST" ? JSON.stringify(body) : undefined,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response
+      .json()
+      .catch(() => ({ message: response.statusText }));
+    console.error("API Error:", errorBody);
+    throw new Error(
+      `API request failed: ${errorBody.error?.message || response.statusText}`,
+    );
+  }
+
+  if (endpoint.includes("/speech")) {
+    return response.arrayBuffer();
+  }
+
+  return response.json();
+}
+
+function extractFunctionCallArguments(apiResponse: any): any {
+  console.log("Raw AI response (Tool Call):", apiResponse);
+  const toolCalls = apiResponse.choices?.[0]?.message?.tool_calls;
+  if (!toolCalls || toolCalls.length === 0) {
+    throw new Error("Invalid API response: No tool calls found.");
+  }
+
+  const functionArguments = toolCalls[0].function.arguments;
+  if (!functionArguments) {
+    throw new Error(
+      "Invalid API response: No function arguments found in tool call.",
+    );
+  }
+
+  console.log("Arguments from tool call:", functionArguments);
+  return JSON.parse(functionArguments);
+}
+
+export async function getAvailableModels(): Promise<string[]> {
+  const apiKey = localStorage.getItem("gemini_apiKey");
+  const baseURL =
+    localStorage.getItem("gemini_baseURL") || "https://api.openai.com/v1";
+
+  if (!apiKey) {
+    throw new Error("API Key not set");
+  }
+
+  const response = await fetch(`${baseURL.replace(/\/$/, "")}/models`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+
+  if (!response.ok) {
+    console.error("Failed to fetch models:", await response.text());
+    throw new Error("获取模型列表失败，请检查API Key和Base URL是否正确。");
+  }
+
+  const json = await response.json();
+  return json.data
+    .map((model: any) => model.id as string)
+    .filter(
+      (id: string) =>
+        !id.includes("embed") &&
+        !id.includes("tts") &&
+        !id.includes("image") &&
+        !id.includes("whisper") &&
+        !id.includes("dall-e"),
+    )
+    .sort();
+}
+
+export async function generateWeeklyPlan(
+  userPrompt: string,
+  selectedFocus: WeeklyFocus[],
+  locationContext: string,
+  additionalPrefs: string = "",
+): Promise<WeeklyPlan> {
+  const model = localStorage.getItem("gemini_selectedModel") || "gpt-4-turbo";
+  const focusMap: Record<string, string> = {
+    tasty: "爆款风味",
+    brain_power: "补脑续命",
+    skin_beauty: "养颜滋阴",
+    digestive: "健脾祛湿",
+    stress_relief: "疏肝理气",
+    weight_loss: "低卡掉秤",
+    tcm_authentic: "正统食养",
+    seasonal_health: "顺时依季",
+  };
+  const focusDescriptions = selectedFocus
+    .map((f) => focusMap[f] || f)
+    .join("、");
+  const userMessage = `请为我生成一份为期7天的周度健康食谱。我的主要关注点是：${focusDescriptions}。额外偏好：${additionalPrefs || "无"}。请确保食谱步骤对新手友好且量化，并包含完整的购物清单。所有返回内容都必须是中文。`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `你是一位顶级中医药食同源主厨，专为追求效率的职场人规划一周健康膳食。
-      
-      【核心质量指令】：
-      1. **新手友好型步骤**：在生成 steps 时，不要使用“适量”、“少许”等模糊词（除非是调料）。必须描述火候、切割规格和感官判断。
-      2. **精准备菜量化**：weekendPrepOperations 必须包含具体的克数或数量指导。
-      3. **高效复用逻辑**：工作日餐食应说明如何复用周末处理好的半成品。
-      4. **无食材限制**：不受食材数量限制，追求正统疗效。
-      
-      用户方向：${focusDescriptions}。
-      偏好：${additionalPrefs || '无'}。`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: WEEKLY_PLAN_SCHEMA as any,
+    const response = await openaiFetch("/chat/completions", {
+      model: model,
+      messages: [{ role: "user", content: userMessage }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "display_weekly_plan",
+            description: "根据用户偏好生成并展示一个完整的7日中文膳食计划。",
+            parameters: weeklyPlanSchema,
+          },
+        },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "display_weekly_plan" },
       },
     });
 
-    if (!response.text) throw new Error("AI 返回内容为空");
-    return JSON.parse(cleanJsonString(response.text));
+    return extractFunctionCallArguments(response);
   } catch (error) {
     console.error("Generate Plan Error:", error);
     throw error;
   }
 }
 
-export async function getTodayRecommendation(selectedFocus: WeeklyFocus[]): Promise<{ name: string; benefit: string; reason: string }> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export async function getTodayRecommendation(
+  selectedFocus: WeeklyFocus[],
+): Promise<{ name: string; benefit: string; reason: string }> {
+  const model = localStorage.getItem("gemini_selectedModel") || "gpt-3.5-turbo";
   const date = new Date();
   const month = date.getMonth() + 1;
-  const seasons = ["冬季", "冬季", "春季", "春季", "春季", "夏季", "夏季", "夏季", "秋季", "秋季", "秋季", "冬季"];
-  const season = seasons[date.getMonth()];
+  const season = [
+    "冬季",
+    "冬季",
+    "春季",
+    "春季",
+    "春季",
+    "夏季",
+    "夏季",
+    "夏季",
+    "秋季",
+    "秋季",
+    "秋季",
+    "冬季",
+  ][date.getMonth()];
+  const userMessage = `今天是 ${month}月${date.getDate()}日 (${season})。我的关注点是：${selectedFocus.join(", ")}。请给我一个今日特别推荐的菜肴，所有返回内容都必须是中文。`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: `今天是 ${month}月${date.getDate()}日 (${season})。用户关注：${selectedFocus.join(', ')}。请推荐一道特别适合今日食用的药膳 JSON。`,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            name: { type: Type.STRING },
-            benefit: { type: Type.STRING },
-            reason: { type: Type.STRING }
+    const response = await openaiFetch("/chat/completions", {
+      model: model,
+      messages: [{ role: "user", content: userMessage }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "display_today_recommendation",
+            description: "为今天生成并展示一个单品的中文菜肴推荐。",
+            parameters: todayRecommendationSchema,
           },
-          required: ["name", "benefit", "reason"]
-        }
-      }
+        },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "display_today_recommendation" },
+      },
     });
-    return JSON.parse(cleanJsonString(response.text));
+    return extractFunctionCallArguments(response);
   } catch (error) {
-    return { name: "温水姜茶", benefit: "驱寒暖胃", reason: "系统忙碌中，建议先饮一杯温水保护肠胃。" };
+    console.error("Get Recommendation Error:", error);
+    return {
+      name: "温水姜茶",
+      benefit: "驱寒暖胃",
+      reason: "系统忙碌中，建议先饮一杯温水保护肠胃。",
+    };
   }
 }
 
-export async function askChef(question: string, context: string): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `你是一位专业的中医药膳大厨。背景：${context}。提问：${question}。请给出极其具体的厨艺或食养指导（150字内）。`,
-  });
-  return response.text || "大厨正在忙，请稍后再试。";
+// Functions below do not require complex JSON structures, so they remain as they are.
+
+export async function askChef(
+  question: string,
+  context: string,
+): Promise<string> {
+  const model = localStorage.getItem("gemini_selectedModel") || "gpt-3.5-turbo";
+  const systemPrompt = `你是一位专业的中医药膳大厨。请根据用户提供的背景和问题，给出极其具体的厨艺或食养指导（150字内）。所有内容都必须是中文。`;
+  const userMessage = `背景：${context}。\n提问：${question}。`;
+
+  try {
+    const response = await openaiFetch(
+      "/chat/completions",
+      {
+        model: model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+      },
+      "POST",
+    );
+
+    const content = response.choices[0].message.content;
+    console.log("Raw content from askChef:", content);
+    return content || "大厨正在忙，请稍后再试。";
+  } catch (error) {
+    console.error("Ask Chef Error:", error);
+    return "大厨忙晕了，请重试。";
+  }
 }
 
 export async function speakChefText(text: string): Promise<ArrayBuffer> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text: `用温柔大厨语气读：${text}` }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Kore' },
-        },
-      },
-    },
-  });
-  
-  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (!base64Audio) throw new Error("Audio failed");
-  
-  const binaryString = atob(base64Audio);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
+  try {
+    const audioBuffer = await openaiFetch("/audio/speech", {
+      model: "tts-1",
+      input: `用温柔大厨语气读：${text}`,
+      voice: "alloy",
+    });
+    return audioBuffer as ArrayBuffer;
+  } catch (error) {
+    console.error("Speech Generation Error:", error);
+    throw new Error("Audio failed");
   }
-  return bytes.buffer;
 }
 
-export async function generateStepImage(recipeName: string, stepText: string): Promise<string> {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const prompt = `Gourmet food prep, macro photography: "${recipeName}". Close-up visual of: ${stepText}. Cinematic soft lighting, professional chef kitchen background, ultra-high definition.`;
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: { parts: [{ text: prompt }] },
-    config: { imageConfig: { aspectRatio: "3:4" } }
-  });
-  for (const part of response.candidates?.[0]?.content?.parts || []) {
-    if (part.inlineData) return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+export async function generateStepImage(
+  recipeName: string,
+  stepText: string,
+): Promise<string> {
+  const prompt = `Gourmet food prep, macro photography of "${recipeName}". A detailed, professional, ultra-high definition photo showing this specific step: "${stepText}". The lighting should be cinematic and soft, in a clean, modern kitchen setting.`;
+
+  try {
+    const response = await openaiFetch("/images/generations", {
+      model: "dall-e-3",
+      prompt: prompt,
+      n: 1,
+      size: "1024x1792",
+      response_format: "b64_json",
+    });
+
+    const b64_json = response.data[0].b64_json;
+    if (!b64_json) {
+      throw new Error("No image data returned from API.");
+    }
+    return `data:image/png;base64,${b64_json}`;
+  } catch (error) {
+    console.error("Image Generation Error:", error);
+    throw new Error("Image Failed");
   }
-  throw new Error("Image Failed");
 }
