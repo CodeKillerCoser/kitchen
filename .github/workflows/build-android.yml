@@ -11,8 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # arm64-v8a is the most common target for modern Android devices.
-        target: [ 'aarch64-linux-android' ]
+        target: ["aarch64-linux-android"] # Modern 64-bit Android target
 
     runs-on: ubuntu-latest
 
@@ -28,7 +27,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.77.2'
+          toolchain: "1.77.2"
           targets: ${{ matrix.target }}
 
       - name: Install frontend dependencies
@@ -37,15 +36,12 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Tauri build
-        # This action simplifies the Tauri build process.
+      - name: Tauri Android build
         uses: tauri-apps/tauri-action@v0
         env:
-          # These secrets are REQUIRED for the build to succeed.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          # The project path is relative to the repository root.
-          projectPath: './src-tauri'
-          # The CLI args to build the app for the specified target and bundle type (APK).
-          args: -t ${{ matrix.target }} -b apk
+          projectPath: "./src-tauri"
+          # Correctly use the 'android build' subcommand
+          args: "android build --target ${{ matrix.target }} --bundle apk"
