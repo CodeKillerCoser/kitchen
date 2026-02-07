@@ -30,18 +30,22 @@ jobs:
           toolchain: "1.77.2"
           targets: ${{ matrix.target }}
 
+      - name: Install Rust-Android dependencies
+        run: cargo install cargo-ndk
+
       - name: Install frontend dependencies
         run: npm install
 
       - name: Build frontend
         run: npm run build
 
-      - name: Tauri Android build
-        uses: tauri-apps/tauri-action@v0
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli
+
+      - name: Build Android App
+        run: |
+          cd src-tauri
+          tauri android build --target ${{ matrix.target }} --bundle apk
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          projectPath: "./src-tauri"
-          # Correctly use the 'android build' subcommand
-          args: "android build --target ${{ matrix.target }} --bundle apk"
