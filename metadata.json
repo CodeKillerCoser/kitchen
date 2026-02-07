@@ -1,0 +1,9 @@
+{
+  "name": "岐黄创意厨坊 (QiHuang Creative Kitchen)",
+  "description": "融合川浙风味的中医药膳规划工具。支持精确量化采购、分步骤AI视频演示及智能时令调理模式。",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
